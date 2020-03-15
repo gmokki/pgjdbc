@@ -146,6 +146,8 @@ public class PgConnection implements BaseConnection {
   private boolean readOnly = false;
   // Filter out database objects for which the current user has no privileges granted from the DatabaseMetaData
   private boolean  hideUnprivilegedObjects ;
+  // If true the ResultSet will try to stream results from backend instead of buffering them
+  private final boolean streamResults;
   // Bind String to UNSPECIFIED or VARCHAR?
   private final boolean bindStringAsVarchar;
 
@@ -238,6 +240,7 @@ public class PgConnection implements BaseConnection {
     }
 
     this.hideUnprivilegedObjects = PGProperty.HIDE_UNPRIVILEGED_OBJECTS.getBoolean(info);
+    this.streamResults = PGProperty.STREAM_RESULTS.getBoolean(info);
 
     Set<Integer> binaryOids = getBinaryOids(info);
 
@@ -597,6 +600,7 @@ public class PgConnection implements BaseConnection {
 
   public LargeObjectManager getLargeObjectAPI() throws SQLException {
     checkClosed();
+    queryExecutor.finishReadingPendingProtocolEvents(true);
     if (largeobject == null) {
       largeobject = new LargeObjectManager(this);
     }
@@ -809,6 +813,11 @@ public class PgConnection implements BaseConnection {
   }
 
   @Override
+  public boolean streamResults() {
+    return streamResults;
+  }
+
+  @Override
   public void setAutoCommit(boolean autoCommit) throws SQLException {
     checkClosed();
 
@@ -852,8 +861,10 @@ public class PgConnection implements BaseConnection {
       flags |= QueryExecutor.QUERY_ONESHOT;
     }
 
+    getQueryExecutor().finishReadingPendingProtocolEvents(true);
+
     try {
-      getQueryExecutor().execute(query, null, new TransactionCommandHandler(), 0, 0, flags);
+      getQueryExecutor().execute(query, null, new TransactionCommandHandler(), 0, 0, flags, false, null);
     } catch (SQLException e) {
       // Don't retry composite queries as it might get partially executed
       if (query.getSubqueries() != null || !queryExecutor.willHealOnRetry(e)) {
@@ -861,7 +872,7 @@ public class PgConnection implements BaseConnection {
       }
       query.close();
       // retry
-      getQueryExecutor().execute(query, null, new TransactionCommandHandler(), 0, 0, flags);
+      getQueryExecutor().execute(query, null, new TransactionCommandHandler(), 0, 0, flags, false, null);
     }
   }
 

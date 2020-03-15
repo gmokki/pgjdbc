@@ -1092,7 +1092,7 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
           | QueryExecutor.QUERY_SUPPRESS_BEGIN;
       StatementResultHandler handler = new StatementResultHandler();
       connection.getQueryExecutor().execute(preparedQuery.query, preparedParameters, handler, 0, 0,
-          flags);
+          flags, false, null);
       ResultWrapper wrapper = handler.getResults();
       if (wrapper != null) {
         rs = wrapper.getResultSet();
@@ -1644,7 +1644,7 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
         | QueryExecutor.QUERY_SUPPRESS_BEGIN;
     StatementResultHandler handler = new StatementResultHandler();
     connection.getQueryExecutor().execute(preparedQuery.query, preparedParameters, handler, 0, 0,
-        flags);
+        flags, false, null);
 
     int[] oids = preparedParameters.getTypeOIDs();
     return createParameterMetaData(connection, oids);
