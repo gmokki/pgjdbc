@@ -154,7 +154,8 @@ public interface QueryExecutor extends TypeTransferModeRegistry {
    * @throws SQLException if query execution fails
    */
   boolean execute(Query query, @Nullable ParameterList parameters, ResultHandler handler, int maxRows,
-      int fetchSize, int flags, boolean adaptiveFetch, Runnable onFinished) throws SQLException;
+      int fetchSize, int flags, boolean adaptiveFetch, @Nullable Runnable onFinished)
+      throws SQLException;
 
   /**
    * Execute several Query, passing results to a provided ResultHandler.

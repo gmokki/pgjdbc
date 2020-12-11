@@ -5,9 +5,12 @@
 
 package org.postgresql.util;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
+
 /**
  * A similar version of Java 8 java.util.function.Supplier interface to make code work on older Java version.
  */
+@FunctionalInterface
 public interface Supplier<T> {
 
   /**
@@ -15,5 +18,5 @@ public interface Supplier<T> {
    *
    * @return next result
    */
-  T get();
+  @Nullable T get();
 }

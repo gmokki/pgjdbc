@@ -11,4 +11,10 @@ public class SQLRuntimeException extends RuntimeException {
   public SQLRuntimeException(SQLException ex) {
     super(ex);
   }
+
+  @Override
+  @SuppressWarnings("return.type.incompatible")
+  public synchronized SQLException getCause() {
+    return (SQLException) super.getCause();
+  }
 }

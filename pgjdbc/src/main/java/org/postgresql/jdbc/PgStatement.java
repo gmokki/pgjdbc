@@ -343,7 +343,7 @@ public class PgStatement implements Statement, BaseStatement {
         PSQLState.WRONG_OBJECT_TYPE);
   }
 
-  private void closeUnclosedResults(ResultWrapper untilResult) throws SQLException {
+  private void closeUnclosedResults(@Nullable ResultWrapper untilResult) throws SQLException {
     synchronized (this) {
       ResultWrapper resultWrapper = this.firstUnclosedResult;
       for (; resultWrapper != untilResult && resultWrapper != null;

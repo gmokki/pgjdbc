@@ -296,7 +296,7 @@ public class QueryExecutorImpl extends QueryExecutorBase {
 
   public synchronized boolean execute(Query query, @Nullable ParameterList parameters,
       ResultHandler handler, int maxRows, int fetchSize, int flags,
-      boolean adaptiveFetch, final Runnable finallyHandler) throws SQLException {
+      boolean adaptiveFetch, final @Nullable Runnable finallyHandler) throws SQLException {
     waitOnLock();
     if (LOGGER.isLoggable(Level.FINEST)) {
       LOGGER.log(Level.FINEST, "  simple execute, handler={0}, maxRows={1}, fetchSize={2}, flags={3}",
@@ -338,6 +338,9 @@ public class QueryExecutorImpl extends QueryExecutorBase {
           sendSync();
         }
         if ((flags & QueryExecutor.QUERY_STREAM_ROWS) != 0) {
+          if (finallyHandler == null) {
+            throw new IllegalStateException("Streaming requires finallyHandler");
+          }
           final ResultHandler handler0 = handler;
           final int flags0 = flags;
           final boolean autosave0 = autosave;
@@ -2116,14 +2119,15 @@ public class QueryExecutorImpl extends QueryExecutorBase {
       }
     }
     try {
+      StreamingList<Tuple> streamingTuples = castNonNull((StreamingList<Tuple>) castNonNull(streamingState).tuples);
       if (buffer) {
         streamingState.streamingSwitchedToBuffer = true;
-        ((StreamingList<Tuple>) streamingState.tuples).bufferResults();
+        streamingTuples.bufferResults();
       } else {
-        ((StreamingList<Tuple>) streamingState.tuples).close();
+        streamingTuples.close();
       }
     } catch (SQLRuntimeException ex) {
-      throw (SQLException) ex.getCause();
+      throw ex.getCause();
     } finally {
       synchronized (this) {
         this.notifyAll();
@@ -2143,14 +2147,14 @@ public class QueryExecutorImpl extends QueryExecutorBase {
     final boolean noResults;
     final boolean bothRowsAndStatus;
     final ResultHandler handler;
-    final SQLThrowingRunnable onFinishedContext;
-    final Consumer<IOException> onIOError;
+    final @Nullable SQLThrowingRunnable onFinishedContext;
+    final @Nullable Consumer<IOException> onIOError;
     final boolean adaptiveFetch;
-    public Thread reader;
+    public @Nullable Thread reader;
     boolean streamRows;
     boolean streamingSwitchedToBuffer;
 
-    List<Tuple> tuples = null;
+    @Nullable List<Tuple> tuples;
 
     boolean endQuery = false;
 
@@ -2163,10 +2167,12 @@ public class QueryExecutorImpl extends QueryExecutorBase {
     // from there.
     boolean doneAfterRowDescNoData = false;
 
-    ProcessState(ResultHandler handler, int flags, boolean adaptiveFetch, SQLThrowingRunnable onFinishedContext, Consumer<IOException> onIOError) {
+    ProcessState(ResultHandler handler, int flags, boolean adaptiveFetch, @Nullable SQLThrowingRunnable onFinishedContext, @Nullable Consumer<IOException> onIOError) {
       this.noResults = (flags & QueryExecutor.QUERY_NO_RESULTS) != 0;
       this.bothRowsAndStatus = (flags & QueryExecutor.QUERY_BOTH_ROWS_AND_STATUS) != 0;
       this.streamRows = (flags & QueryExecutor.QUERY_STREAM_ROWS) != 0;
+
+      assert (onFinishedContext == null) == (onIOError == null) : "Either both or neither of onFinishedContext and onIOError must be given";
 
       this.adaptiveFetch = adaptiveFetch;
       this.handler = handler;
@@ -2187,7 +2193,10 @@ public class QueryExecutorImpl extends QueryExecutorBase {
    * @return True if the results were handled synchronously
    * @throws IOException if IO error occurs during synchronous processing
    */
-  protected boolean processResults(ResultHandler handler, int flags, boolean adaptiveFetch, SQLThrowingRunnable onFinished, Consumer<IOException> onIOError) throws IOException {
+  protected boolean processResults(ResultHandler handler, int flags, boolean adaptiveFetch,
+      @Nullable SQLThrowingRunnable onFinished, @Nullable Consumer<IOException> onIOError)
+      throws IOException {
+
     if (streamingState != null) {
       throw new IOException("Previous result is still streaming");
     }
@@ -2195,13 +2204,15 @@ public class QueryExecutorImpl extends QueryExecutorBase {
   }
 
   private boolean waitForProtocolFree() throws SQLException {
-    if (streamingState.reader == Thread.currentThread()) {
+    ProcessState localStreamingState = streamingState;
+    if (localStreamingState == null || localStreamingState.reader == Thread.currentThread()) {
       return true;
     }
-    while (streamingState.reader != null) {
+    while (localStreamingState.reader != null) {
       try {
         this.wait();
-        if (streamingState == null) {
+        localStreamingState = streamingState;
+        if (localStreamingState == null) {
           return false;
         }
       } catch (InterruptedException ie) {
@@ -2211,11 +2222,11 @@ public class QueryExecutorImpl extends QueryExecutorBase {
             PSQLState.OBJECT_NOT_IN_STATE, ie);
       }
     }
-    streamingState.reader = Thread.currentThread();
+    localStreamingState.reader = Thread.currentThread();
     return true;
   }
 
-  private Tuple processStreamedResultsImpl(ProcessState state) throws SQLRuntimeException {
+  private @Nullable Tuple processStreamedResultsImpl(ProcessState state) throws SQLRuntimeException {
     synchronized (this) {
       if (streamingState != state) {
         return null;
@@ -2231,7 +2242,7 @@ public class QueryExecutorImpl extends QueryExecutorBase {
     try {
       return processResultsImpl(state.handler, state);
     } catch (IOException ex) {
-      state.onIOError.accept(ex);
+      castNonNull(state.onIOError).accept(ex);
     } finally {
       synchronized (this) {
         state.reader = null;
@@ -2241,7 +2252,7 @@ public class QueryExecutorImpl extends QueryExecutorBase {
     return null;
   }
 
-  private Tuple processResultsImpl(ResultHandler handler, ProcessState state) throws IOException {
+  private @Nullable Tuple processResultsImpl(ResultHandler handler, ProcessState state) throws IOException {
     while (!state.endQuery) {
       int c = pgStream.receiveChar();
       switch (c) {
@@ -2486,24 +2497,25 @@ public class QueryExecutorImpl extends QueryExecutorBase {
             LOGGER.log(Level.FINEST, " <=BE DataRow(len={0})", length);
           }
 
-          if (!state.noResults) {
-            if (state.tuples == null) {
+          if (!state.noResults && tuple != null) {
+            List<Tuple> tuples = state.tuples;
+            if (tuples == null) {
               if (tuple.fieldCount() == 0) {
                 state.streamRows = false;
               }
-              createTupleList(state);
+              tuples = state.tuples = createTupleList(state);
             }
             if (state.streamRows) {
-              if (!(state.tuples instanceof StreamingList)) {
+              if (!(tuples instanceof StreamingList)) {
                 throw new IllegalStateException("Must have dynamic list");
               }
               if (state.firstStreamRow) {
                 state.firstStreamRow = false;
                 ExecuteRequest executeData = pendingExecuteQueue.peekFirst();
-                SimpleQuery currentQuery = executeData.query;
+                SimpleQuery currentQuery = castNonNull(executeData).query;
 
                 // handle the first row synchronously, pretending that we have already read the full result set
-                state.tuples.add(tuple);
+                tuples.add(tuple);
                 try {
                   lock(handler);
                 } catch (SQLException ex) {
@@ -2513,14 +2525,15 @@ public class QueryExecutorImpl extends QueryExecutorBase {
                 synchronized (this) {
                   streamingState = state;
                 }
-                handler.handleResultRows(currentQuery, currentQuery.getFields(), state.tuples, null);
+                Field[] fields = castNonNull(currentQuery.getFields());
+                handler.handleResultRows(currentQuery, fields, tuples, null);
               }
               if (!state.streamingSwitchedToBuffer) {
                 pgStream.clearResultBufferCount();
               }
               return tuple;
             }
-            state.tuples.add(tuple);
+            tuples.add(tuple);
           }
 
           break;
@@ -2690,7 +2703,7 @@ public class QueryExecutorImpl extends QueryExecutorBase {
         synchronized (this) {
           unlock(handler);
         }
-        state.onFinishedContext.run();
+        castNonNull(state.onFinishedContext).run();
       } catch (SQLException ex) {
         throw new SQLRuntimeException(ex);
       }
@@ -2699,17 +2712,16 @@ public class QueryExecutorImpl extends QueryExecutorBase {
     return null;
   }
 
-  private void createTupleList(final ProcessState state) {
+  private List<Tuple> createTupleList(final ProcessState state) {
     if (state.streamRows) {
-      state.tuples = new StreamingList<>(new Supplier<Tuple>() {
+      return new StreamingList<>(new Supplier<Tuple>() {
         @Override
-        public Tuple get() {
+        public @Nullable Tuple get() {
           return QueryExecutorImpl.this.processStreamedResultsImpl(state);
         }
       });
-    } else {
-      state.tuples = new ArrayList<>();
     }
+    return new ArrayList<>();
   }
 
   /**
@@ -3137,7 +3149,7 @@ public class QueryExecutorImpl extends QueryExecutorBase {
   private long nextUniqueID = 1;
   private final boolean allowEncodingChanges;
   private final boolean cleanupSavePoints;
-  private ProcessState streamingState;
+  private @Nullable ProcessState streamingState = null;
 
   /**
    * <p>The estimated server response size since we last consumed the input stream from the server, in

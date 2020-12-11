@@ -5,6 +5,8 @@
 
 package org.postgresql.util;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
+
 import java.util.AbstractSequentialList;
 import java.util.ArrayList;
 import java.util.ListIterator;
@@ -18,7 +20,7 @@ import java.util.NoSuchElementException;
  * <p>
  * The list can also switch to basic ArrayList buffered mode, where it preloads items from
  * the supplier to memory. This is required both when applications keep multiple ResultSets
- * open at the same time (thre previous ones must be buffered). Or when the jdbc driver
+ * open at the same time which requires all but last one to be buffered. Or when the jdbc driver
  * itself does extra queries in the background to fetch for example the metadata.
  *</p>
  * @param <E> Tuple type
@@ -26,7 +28,7 @@ import java.util.NoSuchElementException;
 public class StreamingList<E> extends AbstractSequentialList<E> {
   private final DynamicListIterator<E> listIterator;
   private boolean firstTime;
-  private ArrayList<E> buffer;
+  private @Nullable ArrayList<E> buffer;
 
   public StreamingList(Supplier<E> supplier) {
     listIterator = new DynamicListIterator<E>(supplier);
@@ -77,7 +79,7 @@ public class StreamingList<E> extends AbstractSequentialList<E> {
       return buffer.get(index);
     }
     if (listIterator.getResultNumber() != index) {
-      if (listIterator.getResultNumber() == index - 1 && listIterator.previous() != null) {
+      if (listIterator.getResultNumber() == index - 1 && listIterator.hasPrevious()) {
         return listIterator.previous();
       }
       throw new UnsupportedOperationException("Can only fetch current item. " + listIterator.getResultNumber() + "!=" + index);
@@ -101,7 +103,7 @@ public class StreamingList<E> extends AbstractSequentialList<E> {
   @Override
   public boolean isEmpty() {
     if (buffer != null) {
-      buffer.isEmpty();
+      return buffer.isEmpty();
     }
     return listIterator.getResultNumber() == -1;
   }
@@ -115,8 +117,8 @@ public class StreamingList<E> extends AbstractSequentialList<E> {
 
   static class DynamicListIterator<E> implements ListIterator<E> {
     private final Supplier<E> supplier;
-    private E prev;
-    private E next;
+    private @Nullable E prev;
+    private @Nullable E next;
     private boolean end;
     private int resultNumber = -1;
 
@@ -130,27 +132,31 @@ public class StreamingList<E> extends AbstractSequentialList<E> {
 
     @Override
     public boolean hasNext() {
+      return peekNext() != null;
+    }
+
+    private @Nullable E peekNext() {
       if (next != null) {
-        return true;
+        return next;
       }
       if (end) {
-        return false;
+        return null;
       }
       prev = next;
       next = supplier.get();
       if (next == null) {
         end = true;
       }
-      return next != null;
+      return next;
     }
 
     @Override
     public E next() {
-      if (!hasNext()) {
+      E ret = peekNext();
+      if (ret == null) {
         throw new NoSuchElementException();
       }
       resultNumber++;
-      E ret = next;
       next = null;
       return ret;
     }
@@ -164,6 +170,7 @@ public class StreamingList<E> extends AbstractSequentialList<E> {
       resultNumber++;
     }
 
+    @SuppressWarnings("argument.type.incompatible")
     public ArrayList<E> bufferResults() {
       // the array list will be mostly nulls, but that is ok, since we only use streaming list for forward_only queries
       ArrayList<E> list = new ArrayList<>();
@@ -190,11 +197,14 @@ public class StreamingList<E> extends AbstractSequentialList<E> {
 
     @Override
     public boolean hasPrevious() {
-      throw new UnsupportedOperationException();
+      return prev != null;
     }
 
     @Override
     public E previous() {
+      if (prev == null) {
+        throw new NoSuchElementException();
+      }
       return prev;
     }
 
