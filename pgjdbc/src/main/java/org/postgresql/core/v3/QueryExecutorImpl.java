@@ -42,12 +42,12 @@ import org.postgresql.jdbc.BatchResultHandler;
 import org.postgresql.jdbc.TimestampUtils;
 import org.postgresql.util.ByteStreamWriter;
 import org.postgresql.util.GT;
+import org.postgresql.util.NullableSupplier;
 import org.postgresql.util.PSQLException;
 import org.postgresql.util.PSQLState;
 import org.postgresql.util.PSQLWarning;
 import org.postgresql.util.ServerErrorMessage;
 import org.postgresql.util.StreamingList;
-import org.postgresql.util.NullableSupplier;
 
 import org.checkerframework.checker.nullness.qual.NonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
