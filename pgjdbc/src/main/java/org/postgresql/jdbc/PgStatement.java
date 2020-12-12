@@ -215,6 +215,10 @@ public class PgStatement implements Statement, BaseStatement {
     public void handleResultRows(Query fromQuery, Field[] fields, List<Tuple> tuples,
         @Nullable ResultCursor cursor) {
       try {
+        // required when users concurrently close the Statement while it is still executing
+        if (PgStatement.this.isClosed()) {
+          return;
+        }
         ResultSet rs = PgStatement.this.createResultSet(fromQuery, fields, tuples, cursor);
         append(new ResultWrapper(rs));
       } catch (SQLException e) {
